@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from 'dotenv';
 import gs from './app/controller/google-scholar-controller';
 import dblp from './app/controller/dblp-controller';
+import wos from './app/controller/wos-controller';
 import fs from 'fs';
 
 if (fs.existsSync('.env.local')) {
@@ -18,5 +19,7 @@ app.use(express.json());
 app.use('/scraping', gs)
 
 app.use('/scraping', dblp)
+
+app.use('/scraping', wos)
 
 app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
