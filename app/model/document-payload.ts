@@ -8,6 +8,6 @@ export interface DocumentPayload {
     pages: string | null;
     publisher: string | null;
     description: string | null;
-    link: string | null;
+    links: string[];
     citationsUrl: string | null;
 }

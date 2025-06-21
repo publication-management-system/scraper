@@ -113,6 +113,7 @@ const scrapeDocument = async (docUrl: any): Promise<DocumentPayload> => {
     });
     const json = parser.parse(xmlText);
     const record = json.dblp.article ?? json.dblp.inproceedings ?? json.dblp.incollection ?? {};
+    const rawLinks = record.ee ?? [];
 
     return {
         title: record.title ?? null,
@@ -126,7 +127,11 @@ const scrapeDocument = async (docUrl: any): Promise<DocumentPayload> => {
         pages: record.pages ?? null,
         publisher: record.publisher ?? null,
         description: record.note ?? null,
-        link: record.ee ?? null,
+        links: Array.isArray(rawLinks)
+            ? rawLinks.map(link => typeof link === 'string' ? link : link?.['#text']).filter(Boolean)
+            : rawLinks
+                ? [typeof rawLinks === 'string' ? rawLinks : rawLinks['#text']].filter(Boolean)
+                : [],
         citationsUrl: null,
     };
 };

@@ -168,7 +168,7 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
         pages: pageData.contents['pages'] ?? '',
         publisher: pageData.contents['publisher'] ?? '',
         description: pageData.contents['description'] ?? '',
-        link: `https://scholar.google.com/${pageData.contents['link'] ?? ''}`,
+        links: pageData.contents['link'] ? [`https://scholar.google.com/${pageData.contents['link'] ?? ''}`] : [],
         citationsUrl: pageData.citationsUrl ?? '',
     };
 };
