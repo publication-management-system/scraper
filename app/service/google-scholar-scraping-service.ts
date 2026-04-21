@@ -1,4 +1,4 @@
-import GoogleScholarScrapingDto from "../dto/google-scholar-scraping-dto";
+import {GoogleScholarScrapingDto} from "../dto/google-scholar-scraping-dto";
 import {Page} from "puppeteer";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import puppeteer from "puppeteer-extra";
@@ -7,24 +7,22 @@ import {AuthorProfilePayload} from "../model/author-profile-payload";
 import {saveAuthorProfile, saveCitation, saveDocument} from "./scraping-service";
 import {DocumentPayload} from "../model/document-payload";
 import {CitationPayload} from "../model/citation-payload";
+import {getBrowser} from "../config/browser";
+import {ScrapingResponse} from "../model/scraping-response";
 
 puppeteer.use(StealthPlugin());
 
 const GOOGLE_SCHOLAR = 'google_scholar';
 
 const startGoogleScholarScraping = async (scrapingDto: GoogleScholarScrapingDto) => {
-    let browser;
+    let page;
 
     try {
-        browser = await puppeteer.launch({
-            headless: false,
-            args: [`--proxy-server=${process.env.PROXY_URL}`],
-            defaultViewport: {width: 1280, height: 800},
-        });
+        const browser = getBrowser();
         console.log(`Using proxy: ${process.env.PROXY_URL}`);
 
 
-        const page = await browser.newPage();
+        page = await browser.newPage();
         page.setDefaultTimeout(60000)
         await page.setViewport({width: 1280, height: 800});
 
@@ -55,12 +53,145 @@ const startGoogleScholarScraping = async (scrapingDto: GoogleScholarScrapingDto)
     } catch (error) {
         console.error(error);
     } finally {
-        if (browser) {
-            await browser.close();
+        if (page) {
+            await page.close();
         }
     }
 
 };
+
+export async function scrapeAuthorData(payload: string, refId: string): Promise<ScrapingResponse> {
+    let page: Page | undefined;
+
+    try {
+        const { firstName, lastName } = JSON.parse(payload) as {
+            firstName: string;
+            lastName: string;
+        };
+
+        const browser = await getBrowser();
+        page = await browser.newPage();
+        page.setDefaultTimeout(60000)
+        await page.setViewport({width: 1280, height: 800});
+
+        await page.authenticate({
+            username: process.env.PROXY_USERNAME!,
+            password: process.env.PROXY_PASSWORD!,
+        })
+
+        const authorId = await fetchAuthorId(page, firstName, lastName);
+        if (!authorId) {
+            throw new Error("Could not find author id for google-scholar");
+        }
+
+        const profileData = await fetchProfileData(page, authorId);
+        const authorProfilePayload: AuthorProfilePayload = {...profileData, providerId: authorId};
+
+        const docUrls = await getDocUrls(page);
+
+        return {
+            data: JSON.stringify(authorProfilePayload),
+            queueItems: docUrls.map((docUrl) => ({
+                link: docUrl,
+                type: 'DOCUMENT'
+            })),
+            refId
+        }
+    } catch (e) {
+        console.error(e);
+        throw new Error("Could not find author id for google-scholar");
+    } finally {
+        if (page) {
+            await page.close();
+        }
+    }
+}
+
+export async function scrapeDocument2(payload: string, refId: string): Promise<ScrapingResponse> {
+    let page: Page | undefined;
+
+    try {
+        const { url } = JSON.parse(payload) as {
+            url: string
+        };
+
+        const browser = await getBrowser();
+        page = await browser.newPage();
+        page.setDefaultTimeout(60000)
+        await page.setViewport({width: 1280, height: 800});
+
+        await page.authenticate({
+            username: process.env.PROXY_USERNAME!,
+            password: process.env.PROXY_PASSWORD!,
+        })
+
+        const documentPayload = await scrapeDocument(page, url);
+        const urlCitations = documentPayload.citationsUrl ? new URL(documentPayload.citationsUrl) : null;
+        const clusterId = urlCitations ? urlCitations.searchParams.get("cites") : null;
+
+        const documentResponsePayload: DocumentPayload = {...documentPayload, providerId: clusterId};
+
+        return {
+            data: JSON.stringify(documentResponsePayload),
+            queueItems: documentPayload.citationsUrl ? [{
+                link: documentPayload.citationsUrl,
+                type: 'CITATIONS_GS'
+            }] : [],
+            refId
+        }
+    } catch (e) {
+        console.error(e);
+        throw new Error("Could not find author id for google-scholar");
+    } finally {
+        if (page) {
+            await page.close();
+        }
+    }
+}
+
+export async function scrapeCitationData(payload: string, refId: string): Promise<ScrapingResponse> {
+    let page: Page | undefined;
+
+    try{
+        const { url } = JSON.parse(payload) as {
+            url: string;
+        };
+        const browser = await getBrowser();
+        page = await browser.newPage();
+        page.setDefaultTimeout(60000)
+        await page.setViewport({width: 1280, height: 800});
+
+        await page.authenticate({
+            username: process.env.PROXY_USERNAME!,
+            password: process.env.PROXY_PASSWORD!,
+        })
+
+        const documentPayload = await scrapeLinks(page, url);
+        const urlCitations = documentPayload.citationsUrl ? new URL(documentPayload.citationsUrl) : null;
+        const clusterId = urlCitations ? urlCitations.searchParams.get("cites") : null;
+
+        const documentResponsePayload: DocumentPayload = {...documentPayload, providerId: clusterId};
+
+        return {
+            data: JSON.stringify(documentResponsePayload),
+            queueItems: documentPayload.citationsUrl ? [{
+                link: documentPayload.citationsUrl,
+                type: 'CITATIONS_GS'
+            }] : [],
+            refId
+        }
+
+
+    }
+    catch (e) {
+        console.error(e);
+        throw new Error("Could not find author id for google-scholar");
+    } finally {
+        if (page) {
+            await page.close();
+        }
+    }
+}
 
 const fetchAuthorId = async (page: Page, firstName: string, lastName: string) => {
     await page.goto(`https://scholar.google.com/scholar?hl=en&as_sdt=0%2C5&q=${firstName}+${lastName}`, {waitUntil: 'networkidle2'});
@@ -113,7 +244,7 @@ const getDocUrls = async (page: Page) => {
             } else {
                 console.log('Clicking "Show more"...');
                 await page.click('#gsc_bpf_more');
-                await randomSleep(1000, 2000);
+                await randomSleep(1000, 5000);
             }
         } catch (err) {
             console.log('No more "Show more" button found.');
@@ -125,7 +256,11 @@ const getDocUrls = async (page: Page) => {
         return Array.from(document.querySelectorAll('.gsc_a_t'))
             .map(e => e.querySelector('a')?.getAttribute('href'))
             .filter(p => p != null)
-            .map(link => `https://scholar.google.com/${link}`);
+            .filter(p => !p?.includes("list_works"))
+            .map(link => link?.startsWith("/")
+                ? `https://scholar.google.com${link}`
+                : `https://scholar.google.com/${link}`
+            );
     })
 }
 
@@ -170,6 +305,7 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
         description: pageData.contents['description'] ?? '',
         links: pageData.contents['link'] ? [`https://scholar.google.com/${pageData.contents['link'] ?? ''}`] : [],
         citationsUrl: pageData.citationsUrl ?? '',
+        providerId: null,
     };
 };
 

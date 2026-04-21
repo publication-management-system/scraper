@@ -7,4 +7,5 @@ export interface AuthorProfilePayload {
     institutionRole?: string | null;
     email?: string | null;
     imageUrl?: string | null;
+    providerId?: string | null;
 }

@@ -133,6 +133,7 @@ const scrapeDocument = async (docUrl: any): Promise<DocumentPayload> => {
                 ? [typeof rawLinks === 'string' ? rawLinks : rawLinks['#text']].filter(Boolean)
                 : [],
         citationsUrl: null,
+        providerId: null,
     };
 };
 

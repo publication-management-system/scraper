@@ -10,4 +10,5 @@ export interface DocumentPayload {
     description: string | null;
     links: string[];
     citationsUrl: string | null;
+    providerId: string | null;
 }
