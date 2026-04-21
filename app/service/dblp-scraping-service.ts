@@ -177,7 +177,8 @@ const getCitationData = async (citationUrl: string): Promise<CitationPayload> =>
     return {
         title: record.title ?? null,
         citationLink: record.ee ?? null,
-        pdfLink: null
+        pdfLink: null,
+        refId: null
     };
 }
 

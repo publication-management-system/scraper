@@ -31,12 +31,15 @@ const startGoogleScholarScraping = async (scrapingDto: GoogleScholarScrapingDto)
             password: process.env.PROXY_PASSWORD!,
         })
 
+        // FIND AUTHOR
         const authorId = await fetchAuthorId(page, scrapingDto.firstName, scrapingDto.lastName);
         if (!authorId) {
             throw new Error("Could not find author id for google-scholar");
         }
 
         const profileData = await fetchProfileData(page, authorId);
+        // END OF
+
         const authorProfilePayload: AuthorProfilePayload = {...profileData};
         const profileId = await saveAuthorProfile(authorProfilePayload, scrapingDto.sessionId, GOOGLE_SCHOLAR);
         const docUrls = await getDocUrls(page);
@@ -44,10 +47,10 @@ const startGoogleScholarScraping = async (scrapingDto: GoogleScholarScrapingDto)
         for (var i = 1; i < docUrls.length; i++) {
             const documentPayload = await scrapeDocument(page, docUrls[i]);
             const docId = await saveDocument(documentPayload, profileId, scrapingDto.sessionId, GOOGLE_SCHOLAR);
-            const links = await scrapeLinks(page, documentPayload.citationsUrl);
-            for (const link of links) {
-                await saveCitation(link, docId, scrapingDto.sessionId, GOOGLE_SCHOLAR);
-            }
+            // const links = await scrapeLinks(page, documentPayload.citationsUrl);
+            // for (const link of links) {
+            //     await saveCitation(link, docId, scrapingDto.sessionId, GOOGLE_SCHOLAR);
+            // }
         }
 
     } catch (error) {
@@ -64,7 +67,7 @@ export async function scrapeAuthorData(payload: string, refId: string): Promise<
     let page: Page | undefined;
 
     try {
-        const { firstName, lastName } = JSON.parse(payload) as {
+        const {firstName, lastName} = JSON.parse(payload) as {
             firstName: string;
             lastName: string;
         };
@@ -111,7 +114,7 @@ export async function scrapeDocument2(payload: string, refId: string): Promise<S
     let page: Page | undefined;
 
     try {
-        const { url } = JSON.parse(payload) as {
+        const {url} = JSON.parse(payload) as {
             url: string
         };
 
@@ -152,8 +155,8 @@ export async function scrapeDocument2(payload: string, refId: string): Promise<S
 export async function scrapeCitationData(payload: string, refId: string): Promise<ScrapingResponse> {
     let page: Page | undefined;
 
-    try{
-        const { url } = JSON.parse(payload) as {
+    try {
+        const {url} = JSON.parse(payload) as {
             url: string;
         };
         const browser = await getBrowser();
@@ -166,26 +169,17 @@ export async function scrapeCitationData(payload: string, refId: string): Promis
             password: process.env.PROXY_PASSWORD!,
         })
 
-        const documentPayload = await scrapeLinks(page, url);
-        const urlCitations = documentPayload.citationsUrl ? new URL(documentPayload.citationsUrl) : null;
-        const clusterId = urlCitations ? urlCitations.searchParams.get("cites") : null;
-
-        const documentResponsePayload: DocumentPayload = {...documentPayload, providerId: clusterId};
+        const scrapedCitations = await scrapeLinks(page, url);
+        const citations = scrapedCitations.map((c) => ({...c, refId: refId}));
 
         return {
-            data: JSON.stringify(documentResponsePayload),
-            queueItems: documentPayload.citationsUrl ? [{
-                link: documentPayload.citationsUrl,
-                type: 'CITATIONS_GS'
-            }] : [],
+            data: JSON.stringify(citations),
+            queueItems: [],
             refId
         }
-
-
-    }
-    catch (e) {
+    } catch (e) {
         console.error(e);
-        throw new Error("Could not find author id for google-scholar");
+        throw new Error("Error scraping citation data");
     } finally {
         if (page) {
             await page.close();
@@ -326,7 +320,8 @@ const scrapeLinks = async (page: Page, citationsUrl: string | null): Promise<Cit
                 return {
                     title: entry.querySelector('.gs_rt a')?.textContent ?? 'No title',
                     citationLink: entry.querySelector('.gs_rt a')?.getAttribute('href') ?? 'No link',
-                    pdfLink: entry.querySelector('.gs_or_ggsm a')?.getAttribute('href') ?? 'No PDF'
+                    pdfLink: entry.querySelector('.gs_or_ggsm a')?.getAttribute('href') ?? 'No PDF',
+                    refId: null
                 };
             })
         })

@@ -45,7 +45,7 @@ router.post('/execute', async (req: Request<{}, ScrapingQuery, ScrapingPayload>,
         }
 
         if (actionType === 'CITATIONS_GS') {
-            try{
+            try {
                 const profileData = await scrapeCitationData(payload, refId as string);
                 res.json(profileData);
                 break;
