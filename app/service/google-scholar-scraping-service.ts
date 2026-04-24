@@ -144,6 +144,10 @@ export async function scrapeDocument2(payload: string, refId: string): Promise<S
         }
     } catch (e) {
         console.error(e);
+        const {url} = JSON.parse(payload) as {
+            url: string
+        };
+        console.error("FAILED URL DOCUMENT", {url});
         throw new Error("Could not find author id for google-scholar");
     } finally {
         if (page) {
@@ -290,7 +294,7 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
     return {
         title: pageData?.title ?? '',
         coAuthorsNames: ((pageData.contents['authors'] ?? '').split(',') as string[]).map(s => s.trim()),
-        publicationDate: new Date(pageData.contents['publication date'] ?? '').toISOString(),
+        publicationDate: pageData.contents['publication date'] ?? null,
         issued: pageData.contents['book'] ?? pageData.contents['journal'] ?? pageData.contents['conference'] ?? pageData.contents['source'] ?? '',
         volume: pageData.contents['volume'] ?? '',
         issue: pageData.contents['issue'] ?? '',
@@ -316,15 +320,27 @@ const scrapeLinks = async (page: Page, citationsUrl: string | null): Promise<Cit
 
     while (hasNextPage) {
         const citations = await page.evaluate((): CitationPayload[] => {
-            return Array.from(document.querySelectorAll('.gs_r')).map(entry => {
-                return {
-                    title: entry.querySelector('.gs_rt a')?.textContent ?? 'No title',
-                    citationLink: entry.querySelector('.gs_rt a')?.getAttribute('href') ?? 'No link',
-                    pdfLink: entry.querySelector('.gs_or_ggsm a')?.getAttribute('href') ?? 'No PDF',
-                    refId: null
-                };
-            })
-        })
+            return Array.from(document.querySelectorAll('.gs_r'))
+                .slice(1)
+                .map(entry => {
+                    const titleEl = entry.querySelector('.gs_rt');
+                    const linkEl = entry.querySelector('.gs_rt a') as HTMLAnchorElement | null;
+                    const pdfEl = entry.querySelector('.gs_or_ggsm a') as HTMLAnchorElement | null;
+
+                    const title =
+                        entry.querySelector('.gs_rt a')?.textContent?.trim() ||
+                        entry.querySelector('.gs_rt')?.textContent?.trim() ||
+                        null;
+
+                    return {
+                        title: title || null,
+                        citationLink: linkEl?.href || null,
+                        pdfLink: pdfEl?.href || null,
+                        refId: null
+                    };
+                })
+                .filter(item => item.title && item.title.length > 0);
+        });
 
         results.push(...citations);
 
