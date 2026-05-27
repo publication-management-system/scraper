@@ -8,4 +8,6 @@ export interface AuthorProfilePayload {
     email?: string | null;
     imageUrl?: string | null;
     providerId?: string | null;
+    h_index?: string | null;
+    i10_index?: string | null;
 }

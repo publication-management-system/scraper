@@ -1,67 +1,15 @@
-import {GoogleScholarScrapingDto} from "../dto/google-scholar-scraping-dto";
 import {Page} from "puppeteer";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import puppeteer from "puppeteer-extra";
 import {randomSleep} from "./browser-utils";
 import {AuthorProfilePayload} from "../model/author-profile-payload";
-import {saveAuthorProfile, saveCitation, saveDocument} from "./scraping-service";
 import {DocumentPayload} from "../model/document-payload";
 import {CitationPayload} from "../model/citation-payload";
 import {getBrowser} from "../config/browser";
 import {ScrapingResponse} from "../model/scraping-response";
+import {normalizeDate} from "./scraping-utils";
 
 puppeteer.use(StealthPlugin());
-
-const GOOGLE_SCHOLAR = 'google_scholar';
-
-const startGoogleScholarScraping = async (scrapingDto: GoogleScholarScrapingDto) => {
-    let page;
-
-    try {
-        const browser = getBrowser();
-        console.log(`Using proxy: ${process.env.PROXY_URL}`);
-
-
-        page = await browser.newPage();
-        page.setDefaultTimeout(60000)
-        await page.setViewport({width: 1280, height: 800});
-
-        await page.authenticate({
-            username: process.env.PROXY_USERNAME!,
-            password: process.env.PROXY_PASSWORD!,
-        })
-
-        // FIND AUTHOR
-        const authorId = await fetchAuthorId(page, scrapingDto.firstName, scrapingDto.lastName);
-        if (!authorId) {
-            throw new Error("Could not find author id for google-scholar");
-        }
-
-        const profileData = await fetchProfileData(page, authorId);
-        // END OF
-
-        const authorProfilePayload: AuthorProfilePayload = {...profileData};
-        const profileId = await saveAuthorProfile(authorProfilePayload, scrapingDto.sessionId, GOOGLE_SCHOLAR);
-        const docUrls = await getDocUrls(page);
-
-        for (var i = 1; i < docUrls.length; i++) {
-            const documentPayload = await scrapeDocument(page, docUrls[i]);
-            const docId = await saveDocument(documentPayload, profileId, scrapingDto.sessionId, GOOGLE_SCHOLAR);
-            // const links = await scrapeLinks(page, documentPayload.citationsUrl);
-            // for (const link of links) {
-            //     await saveCitation(link, docId, scrapingDto.sessionId, GOOGLE_SCHOLAR);
-            // }
-        }
-
-    } catch (error) {
-        console.error(error);
-    } finally {
-        if (page) {
-            await page.close();
-        }
-    }
-
-};
 
 export async function scrapeAuthorData(payload: string, refId: string): Promise<ScrapingResponse> {
     let page: Page | undefined;
@@ -174,7 +122,13 @@ export async function scrapeCitationData(payload: string, refId: string): Promis
         })
 
         const scrapedCitations = await scrapeLinks(page, url);
-        const citations = scrapedCitations.map((c) => ({...c, refId: refId}));
+        const citations = scrapedCitations
+            .filter(c => c.title)
+            .map((c) => ({...c, refId: refId}));
+
+        if (citations.length === 0) {
+            throw new Error("Could not find citations for google-scholar");
+        }
 
         return {
             data: JSON.stringify(citations),
@@ -222,6 +176,8 @@ const fetchProfileData = async (page: Page, authorId: string) => {
             institutionRole: 'Professor',
             email: '',
             topicElements: Array.from(document.querySelector('#gsc_prf_int')?.querySelectorAll('a') ?? []).map(el => el.textContent),
+            h_index: document.querySelector("#gsc_rsb_st")?.querySelectorAll("tr")[2].querySelectorAll("td")[1].textContent,
+            i10_index: document.querySelector("#gsc_rsb_st")?.querySelectorAll("tr")[3].querySelectorAll("td")[1].textContent
         }
     })
 }
@@ -291,10 +247,14 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
 
     console.log('doc page data:', pageData);
 
+    if (!pageData.title) {
+        throw new Error('No such doc page data.');
+    }
+
     return {
         title: pageData?.title ?? '',
         coAuthorsNames: ((pageData.contents['authors'] ?? '').split(',') as string[]).map(s => s.trim()),
-        publicationDate: pageData.contents['publication date'] ?? null,
+        publicationDate: normalizeDate(pageData.contents['publication date']) ?? null,
         issued: pageData.contents['book'] ?? pageData.contents['journal'] ?? pageData.contents['conference'] ?? pageData.contents['source'] ?? '',
         volume: pageData.contents['volume'] ?? '',
         issue: pageData.contents['issue'] ?? '',
@@ -302,7 +262,7 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
         publisher: pageData.contents['publisher'] ?? '',
         description: pageData.contents['description'] ?? '',
         links: pageData.contents['link'] ? [`https://scholar.google.com/${pageData.contents['link'] ?? ''}`] : [],
-        citationsUrl: pageData.citationsUrl ?? '',
+        citationsUrl: pageData.citationsUrl ? new URL(pageData.citationsUrl, 'https://scholar.google.com').href : '',
         providerId: null,
     };
 };
@@ -355,5 +315,3 @@ const scrapeLinks = async (page: Page, citationsUrl: string | null): Promise<Cit
 
     return results;
 }
-
-export default startGoogleScholarScraping

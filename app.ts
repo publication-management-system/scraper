@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from 'dotenv';
-import gs from './app/controller/google-scholar-controller';
+import scraping from './app/controller/scraping-controller';
 import dblp from './app/controller/dblp-controller';
 import wos from './app/controller/wos-controller';
 import fs from 'fs';
@@ -18,11 +18,7 @@ const app = express();
 
 app.use(express.json());
 
-app.use('/scraping', gs)
-
-app.use('/scraping', dblp)
-
-app.use('/scraping', wos);
+app.use('/scraping', scraping);
 
 (async function (): Promise<void> {
     await createBrowser();
