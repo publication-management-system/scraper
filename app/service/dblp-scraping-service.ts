@@ -2,18 +2,22 @@ import {Page} from "puppeteer";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import puppeteer from "puppeteer-extra";
 import {randomSleep} from "./browser-utils";
-import DblpScrapingDto from "../dto/dblp-scraping-dto";
 import {XMLParser} from "fast-xml-parser";
 import {DocumentPayload} from "../model/document-payload";
 import {AuthorProfilePayload} from "../model/author-profile-payload";
-import {saveAuthorProfile, saveCitation, saveDocument} from "./scraping-service";
 import {CitationPayload} from "../model/citation-payload";
-import {getBrowser} from "../config/browser";
 import {ScrapingResponse} from "../model/scraping-response";
+import {getBrowser} from "../config/browser";
+import {normalizeDate} from "./scraping-utils";
+import axios from "axios";
+import {CitationRecordResponse} from "../model/dblp-models";
 
 puppeteer.use(StealthPlugin());
 
-export async function startDblpScraping(payload: string, refId: string): Promise<ScrapingResponse> {
+const DBLP_URL = `https://dblp.dagstuhl.de`;
+const CITATIONS_API_URL = `https://api.opencitations.net/index/v1/citations`;
+
+export async function scrapeAuthorData(payload: string, refId: string): Promise<ScrapingResponse> {
     let page: Page | undefined;
 
     try {
@@ -22,18 +26,8 @@ export async function startDblpScraping(payload: string, refId: string): Promise
             lastName: string;
         };
 
-        // browser = await puppeteer.launch({
-        //     headless: false,
-        //     args: [`--proxy-server=${process.env.PROXY_URL}`],
-        //     defaultViewport: {width: 1280, height: 800},
-        // });
-        // console.log(`Using proxy: ${process.env.PROXY_URL}`);
-
         const browser = await getBrowser();
         page = await browser.newPage();
-
-        // const page = await browser.newPage();
-
         page.setDefaultTimeout(60000)
         await page.setViewport({width: 1280, height: 800});
 
@@ -42,21 +36,20 @@ export async function startDblpScraping(payload: string, refId: string): Promise
             password: process.env.PROXY_PASSWORD!,
         })
 
-        const authorId = await fetchAuthorLink(page, firstName, lastName);
-        if (!authorId) {
+        let authorLink = await fetchAuthorLink(page, firstName, lastName) + ".xml";
+
+        if (authorLink === "null.xml") {
             throw new Error("Could not find author id for dblp");
         }
 
-        const authorProfilePayload: AuthorProfilePayload = {firstName, lastName, providerId: authorId};
+        authorLink = authorLink.replace("https://dblp.org", DBLP_URL);
 
-        await page.goto( `https://dblp.org/pid/${authorId}` , {waitUntil: "networkidle2"}); //move into getDocUrls?
-        await randomSleep(2000, 5000);
-
-        const docUrls = await getDocUrls(page);
+        const profileData = await getProfileData(authorLink);
+        const authorProfilePayload: AuthorProfilePayload = {...profileData};
 
         return {
             data: JSON.stringify(authorProfilePayload),
-            queueItems: docUrls.map((docUrl) => ({
+            queueItems: profileData.docUrls.map((docUrl: string) => ({
                 link: docUrl,
                 type: 'DOCUMENT_DBLP'
             })),
@@ -64,7 +57,7 @@ export async function startDblpScraping(payload: string, refId: string): Promise
         }
     } catch (e) {
         console.error(e);
-        throw new Error("Could not find author id for dblp");
+        throw new Error("Could not find author id for google-scholar");
     } finally {
         if (page) {
             await page.close();
@@ -72,140 +65,197 @@ export async function startDblpScraping(payload: string, refId: string): Promise
     }
 }
 
-        // const authorProfile : AuthorProfilePayload = {
-        //     firstName: scrapingDto.firstName,
-        //     lastName: scrapingDto.lastName,
-        // }
-        //
-        // const authorProfileId = await saveAuthorProfile(authorProfile, scrapingDto.sessionId, 'dblp');
-        // await browser.close();
+export async function scrapeDocument(payload: string, refId: string): Promise<ScrapingResponse> {
+    let {url} = JSON.parse(payload) as {
+        url: string
+    };
 
-        // for (let i = 1; i < docUrls.length; i++) {
-        //     try {
-        //         await randomSleep(500, 800);
-        //         const documentPayload = await scrapeDocument(docUrls[i]);
-        //         const citationsUrl = await scrapeCitations(page, docUrls[i]);
-        //         const docId = await saveDocument(documentPayload, authorProfileId, scrapingDto.sessionId, 'dblp');
-        //         for (let citationUrIdx in citationsUrl) {
-        //             await randomSleep(500, 800);
-        //             getCitationData(citationsUrl[citationUrIdx]).then((data) => {
-        //                 saveCitation(data, docId, scrapingDto.sessionId, 'dblp');
-        //             }).catch((err) => console.log(err));
-        //         }
-        //
-        //     } catch (err) {
-        //         console.error(`Could not find document payload: ${docUrls[i]} ${err}`);
-        //     }
-        // }
+    url.replace("https://dblp.org", DBLP_URL)
 
-    // } catch (error) {
-    //     console.error(error);
-    // } finally {
-    //     if (browser) {
-    //         await browser.close();
-    //     }
-    // }
+    const documentPayload = await scrapeDocumentData(url);
+    const documentResponsePayload: DocumentPayload = {...documentPayload};
 
-export async function scrapeDocument2DBLP(payload: string, refId: string): Promise<ScrapingResponse> {
-    let page: Page | undefined;
+    return {
+        data: JSON.stringify(documentResponsePayload),
+        queueItems: documentPayload.citationsUrl ? [{
+            link: documentPayload.citationsUrl,
+            type: 'CITATIONS_DBLP'
+        }] : [],
+        refId
+    }
+};
 
-    try {
-        const {url} = JSON.parse(payload) as {
-            url: string
-        };
+export async function scrapeCitations(payload: string, refId: string): Promise<ScrapingResponse> {
+    let {url} = JSON.parse(payload) as {
+        url: string
+    };
 
-        const browser = await getBrowser();
-        page = await browser.newPage();
-        page.setDefaultTimeout(60000)
-        await page.setViewport({width: 1280, height: 800});
+    url.replace("https://dblp.org", DBLP_URL)
 
-        await page.authenticate({
-            username: process.env.PROXY_USERNAME!,
-            password: process.env.PROXY_PASSWORD!,
-        })
-
-        const documentPayload = await scrapeDocument(page, url);
-        const urlCitations = documentPayload.citationsUrl ? new URL(documentPayload.citationsUrl) : null;
-        const clusterId = urlCitations ? urlCitations.searchParams.get("cites") : null;
-
-        const documentResponsePayload: DocumentPayload = {...documentPayload, providerId: clusterId};
-
-        return {
-            data: JSON.stringify(documentResponsePayload),
-            queueItems: documentPayload.citationsUrl ? [{
-                link: documentPayload.citationsUrl,
-                type: 'CITATION'
-            }] : [],
-            refId
+    const citationsResponse = await axios.get<CitationRecordResponse[]>(url, {
+        timeout: 30000,
+        proxy: {
+            host: process.env.PROXY_URL!.replace(":823", ''),
+            port: 823,
+            auth: {username: process.env.PROXY_USERNAME!, password: process.env.PROXY_PASSWORD!}
         }
-    } catch (e) {
-        console.error(e);
-        const {url} = JSON.parse(payload) as {
-            url: string
-        };
-        console.error("FAILED URL DOCUMENT", {url});
-        throw new Error("Could not find author id for dblp");
-    } finally {
-        if (page) {
-            await page.close();
+    });
+
+    const citations = citationsResponse.data.map(c => c.citing);
+    let response: CitationPayload[] = [];
+
+    for (const citation of citations) {
+        try {
+            const dblpDocument = `${DBLP_URL}/doi/${citation}.xml`;
+            const xmlResponse = await axios.get(dblpDocument, {
+                timeout: 30000,
+                proxy: {
+                    host: process.env.PROXY_URL!.replace(":823", ''),
+                    port: 823,
+                    auth: {username: process.env.PROXY_USERNAME!, password: process.env.PROXY_PASSWORD!}
+                }
+            });
+            const parser = new XMLParser({
+                ignoreAttributes: false,
+                attributeNamePrefix: '',
+            });
+            const json = parser.parse(await xmlResponse.data);
+            const record = json.dblp.article ?? json.dblp.inproceedings ?? json.dblp.incollection ?? {};
+
+            const rawLinks = record.ee ?? [];
+            const links = Array.isArray(rawLinks)
+                ? rawLinks.map(link => typeof link === 'string' ? link : link?.['#text']).filter(Boolean)
+                : rawLinks
+                    ? [typeof rawLinks === 'string' ? rawLinks : rawLinks['#text']].filter(Boolean)
+                    : [];
+
+            const citationPayload: CitationPayload = {
+                citationLink: links[0],
+                pdfLink: null,
+                refId: refId,
+                title: record.title
+            };
+
+            response = [...response, citationPayload];
+        } catch (e) {
+            console.error(e);
         }
+    }
+
+    return {
+        data: JSON.stringify(response),
+        queueItems: [],
+        refId
     }
 }
 
 
 const fetchAuthorLink = async (page: Page, firstName: string, lastName: string) => {
-    await page.goto(`https://dblp.org/search?q=${firstName}+${lastName}`);
-    await page.waitForSelector('#completesearch-authors', {timeout: 10000});
-    await randomSleep(500, 1000);
+    const query = encodeURIComponent(`${firstName}* ${lastName}*`);
 
-    return await page.evaluate(() => {
-        const authorLink = document.querySelector('a[href^="https://dblp.org/pid/"]');
-        const href = authorLink?.getAttribute('href');
-
-        if (!href) {
-            return null;
+    const response = await axios.get(`${DBLP_URL}/search/author/api?q=${query}&format=json`, {
+        timeout: 30000,
+        proxy: {
+            host: process.env.PROXY_URL!.replace(":823", ''),
+            port: 823,
+            auth: {username: process.env.PROXY_USERNAME!, password: process.env.PROXY_PASSWORD!}
         }
-
-        return new URL(href)
-            .pathname
-            .replace('/pid/', '')
-            .replace('.html', '');
     });
+
+    const data = await response.data;
+    const hit = data?.result?.hits?.hit;
+
+    const firstHit = Array.isArray(hit) ? hit[0] : hit;
+
+    return firstHit?.info?.url ?? null;
 }
 
-const getDocUrls = async (page: Page) => {
-
-    return page.evaluate(() => {
-        return Array.from(document.querySelectorAll('ul.publ-list > li.entry'))
-            .map(listElement =>
-                listElement.querySelectorAll('ul > li.drop-down')[1]
-                    ?.querySelector('div.body')
-                    ?.querySelector('ul > li:nth-last-child(2)')
-                    ?.querySelector('a')
-                    ?.getAttribute('href')
-            )
-            .filter((url): url is string => !!url);
-    })
-
-}
-
-const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayload> => {
-    const xmlResponse = await fetch(docUrl);
-    const xmlText = await xmlResponse.text();
+const getProfileData = async (authorLink: string) => {
+    const xmlResponse = await axios.get(authorLink, {
+        timeout: 30000,
+        proxy: {
+            host: process.env.PROXY_URL!.replace(":823", ''),
+            port: 823,
+            auth: {username: process.env.PROXY_USERNAME!, password: process.env.PROXY_PASSWORD!}
+        }
+    });
     const parser = new XMLParser({
         ignoreAttributes: false,
         attributeNamePrefix: '',
     });
-    const json = parser.parse(xmlText);
+    const json = parser.parse(await xmlResponse.data);
+    const author = Array.isArray(json.dblpperson.person.author)
+        ? json.dblpperson.person.author[0]
+        : json.dblpperson.person.author;
+
+    const authorName = author?.['#text'] ?? author;
+    const nameParts = authorName.split(' ');
+
+    const records = Array.isArray(json.dblpperson.r) ? json.dblpperson.r : [json.dblpperson.r];
+
+    return {
+        authorName: authorName,
+        firstName: nameParts[0] ?? null,
+        middleName: nameParts.length > 2 ? nameParts.slice(1, -1).join(' ') : null,
+        lastName: nameParts.length > 1 ? nameParts[nameParts.length - 1] : null,
+        imageUrl: null,
+        institution: null,
+        institutionRole: null,
+        email: '',
+        topicElements: [],
+        providerId: json.dblpperson.pid ?? json.dblpperson.person.author.pid ?? null,
+        docUrls: records
+            .map((r: unknown) => {
+                if (!r || typeof r !== 'object') return null;
+
+                const doc = Object.values(
+                    r as Record<string, { key?: string }>
+                )[0];
+
+                return doc?.key ? `${DBLP_URL}/rec/${doc.key}.xml` : null;
+            })
+            .filter((url: string | null) => url !== null)
+    }
+}
+
+
+async function scrapeDocumentData(documentUrl: string) {
+    const xmlResponse = await axios.get(documentUrl, {
+        timeout: 30000,
+        proxy: {
+            host: process.env.PROXY_URL!.replace(":823", ''),
+            port: 823,
+            auth: {username: process.env.PROXY_USERNAME!, password: process.env.PROXY_PASSWORD!}
+        }
+    });
+    const parser = new XMLParser({
+        ignoreAttributes: false,
+        attributeNamePrefix: '',
+    });
+    const json = parser.parse(await xmlResponse.data);
     const record = json.dblp.article ?? json.dblp.inproceedings ?? json.dblp.incollection ?? {};
     const rawLinks = record.ee ?? [];
+    const links = Array.isArray(rawLinks)
+        ? rawLinks.map(link => typeof link === 'string' ? link : link?.['#text']).filter(Boolean)
+        : rawLinks
+            ? [typeof rawLinks === 'string' ? rawLinks : rawLinks['#text']].filter(Boolean)
+            : [];
+
+    const doiId = links
+        .find(link => link.startsWith('https://doi.org/'))
+        ?.replace('https://doi.org/', '');
+
+    const rawAuthors = record.author
+        ? Array.isArray(record.author) ? record.author : [record.author]
+        : [];
+
+    const coauthorNames = rawAuthors
+        .map((author: any) => typeof author === 'string' ? author : author?.['#text'])
 
     return {
         title: record.title ?? null,
-        publicationDate: record.year ?? null,
-        coAuthorsNames: Array.isArray(record.author)
-            ? record.author
-            : record.author ? [record.author] : [],
+        publicationDate: normalizeDate(record.year) ?? null,
+        coAuthorsNames: coauthorNames,
         issued: record.year ?? null,
         volume: record.volume ?? null,
         issue: record.number ?? null,
@@ -217,54 +267,7 @@ const scrapeDocument = async (page: any, docUrl: string): Promise<DocumentPayloa
             : rawLinks
                 ? [typeof rawLinks === 'string' ? rawLinks : rawLinks['#text']].filter(Boolean)
                 : [],
-        citationsUrl: docUrl.substring(0, docUrl.length - 3) + "html",
-        providerId: null,
-    };
-};
-
-const scrapeCitations = async (page : Page, docUrl: any): Promise<string[]> => {
-
-    const docCitations = docUrl.substring(0, docUrl.length - 3) + "html";
-    await page.goto(docCitations);
-    await randomSleep(500, 1000);
-
-    const loadRefs = await page.$('#references-load input');
-    if (loadRefs) {
-        const isChecked = await loadRefs.getProperty('checked');
-        const chkd = await isChecked.jsonValue();
-        if (!chkd) {
-            await loadRefs.click()
-        }
-    }
-    await page.waitForSelector('#publ-references-section', {timeout: 10000});
-
-    return await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('ul.publ-list > li.entry')).map(listElement => {
-            return listElement.querySelectorAll('ul > li.drop-down')[1]
-                .querySelector('div.body')
-                ?.querySelector('ul > li:last-child')
-                ?.querySelector('a')
-                ?.getAttribute('href');
-        }).filter(url => url !== null && url !== undefined) ?? [];
-    });
-}
-
-const getCitationData = async (citationUrl: string): Promise<CitationPayload> => {
-    const xmlResponse = await fetch(citationUrl);
-    const xmlText = await xmlResponse.text();
-    const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '',
-    });
-    const json = parser.parse(xmlText);
-    const record = json.dblp.article ?? json.dblp.inproceedings ?? json.dblp.incollection ?? {};
-
-    return {
-        title: record.title ?? null,
-        citationLink: record.ee ?? null,
-        pdfLink: null,
-        refId: null
+        citationsUrl: doiId ? `${CITATIONS_API_URL}/${doiId}?format=json` : null,
+        providerId: record.key,
     };
 }
-
-export default startDblpScraping

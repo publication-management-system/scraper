@@ -1,8 +1,6 @@
 import express from "express";
 import dotenv from 'dotenv';
 import scraping from './app/controller/scraping-controller';
-import dblp from './app/controller/dblp-controller';
-import wos from './app/controller/wos-controller';
 import fs from 'fs';
 import {createBrowser} from "./app/config/browser";
 

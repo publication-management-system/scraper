@@ -1,6 +1,6 @@
 export interface QueueItem {
     link: string;
-    type: 'FIND_AUTHOR' | 'DOCUMENT' | 'CITATIONS_GS' | 'CITATION' | 'FIND_AUTHOR_DBLP' | 'DOCUMENT_DBLP';
+    type: 'FIND_AUTHOR' | 'DOCUMENT' | 'CITATIONS_GS' | 'CITATION' | 'FIND_AUTHOR_DBLP' | 'CITATIONS_DBLP';
 }
 
 export interface ScrapingResponse {

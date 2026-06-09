@@ -1,8 +1,8 @@
 import express, {Request, Response} from 'express';
 import {ScrapingPayload, ScrapingQuery} from "../dto/scraping-dto";
-import {scrapeAuthorData, scrapeCitationData, scrapeDocument2} from "../service/google-scholar-scraping-service";
+import * as GoogleScholar from "../service/google-scholar-scraping-service";
+import * as Dblp from "../service/dblp-scraping-service";
 import {ScrapingResponse} from "../model/scraping-response";
-import startDblpScraping, {scrapeDocument2DBLP} from "../service/dblp-scraping-service";
 
 const router = express.Router();
 
@@ -28,11 +28,12 @@ router.post<{}, ScrapingResponse | { error: string }, ScrapingPayload, ScrapingQ
     }
 
     const handlers: Record<string, (payload: string, refId: string) => Promise<ScrapingResponse>> = {
-        FIND_AUTHOR: scrapeAuthorData,
-        DOCUMENT: scrapeDocument2,
-        CITATIONS_GS: scrapeCitationData,
-        DOCUMENT_DBLP: scrapeDocument2DBLP,
-        FIND_AUTHOR_DBLP: startDblpScraping,
+        FIND_AUTHOR: GoogleScholar.scrapeAuthorData,
+        DOCUMENT: GoogleScholar.scrapeDocument2,
+        CITATIONS_GS: GoogleScholar.scrapeCitationData,
+        FIND_AUTHOR_DBLP: Dblp.scrapeAuthorData,
+        DOCUMENT_DBLP: Dblp.scrapeDocument,
+        CITATIONS_DBLP: Dblp.scrapeCitations,
     };
 
     const handler = handlers[actionType as string];
